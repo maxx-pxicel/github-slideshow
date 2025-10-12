@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Knight's Tour Interactive</title>
+<style>
+  body {
+    margin: 0;
+    background-color: #0f172a;
+    color: #fff;
+    font-family: sans-serif;
+    text-align: center;
+    overflow: hidden;
+  }
+  h2 { margin: 10px 0; }
+  #toolbar {
+    position: fixed;
+    top: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    z-index: 100;
+  }
+  button {
+    background-color: #3b82f6;
+    border: none;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 10px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+  button:hover {
+    background-color: #2563eb;
+  }
+  button:disabled {
+    background-color: #6b7280;
+    cursor: not-allowed;
+  }
+  #board-container {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+  }
+  canvas {
+    background-color: #0f172a;
+    border: 2px solid #334155;
+    cursor: grab;
+  }
+  canvas:active {
+    cursor: grabbing;
+  }
+</style>
+</head>
+<body>
+  <div id="toolbar">
+    <button id="nextBtn">Next Step</button>
+    <button id="undoBtn">Undo Step</button>
+    <button id="resetBtn">Reset</button>
+    <button id="zoomResetBtn">Zoom Reset</button>
+  </div>
+  <div id="board-container">
+    <canvas id="board" width="800" height="800"></canvas>
+  </div>
+
+<script>
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+const size = 200; // board size
+
+// View state
+let scale = 1, offsetX = 0, offsetY = 0;
+let dragging = false, lastX, lastY;
+
+// Board state
+const cellSize = 20;
+let startX = null, startY = null;
+let knightTour = [];
+
+// Knight moves
+const moves = [
+  [2, 1], [1, 2], [-1, 2], [-2, 1],
+  [-2, -1], [-1, -2], [1, -2], [2, -1]
+];
+
+// Constants for zoom limits
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 5.0;
+const ZOOM_FACTOR = 1.1;
+
+function resetView() {
+  scale = 1;
+  offsetX = 0;
+  offsetY = 0;
+}
+
+function resetBoard() {
+  startX = null;
+  startY = null;
+  knightTour = [];
+}
+
+function drawBoard() {
+  ctx.save();
+  ctx.setTransform(scale, 0, 0, scale, offsetX, offsetY);
+  
+  // Clear canvas
+  ctx.clearRect(-offsetX/scale, -offsetY/scale, canvas.width/scale, canvas.height/scale);
+
+  // Draw grid
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < size; i++) {
+    for (let j = 0; j < size; j++) {
+      ctx.strokeRect(i * cellSize, j * cellSize, cellSize, cellSize);
+    }
+  }
+
+  // Draw path
+  if (knightTour.length > 1) {
+    ctx.strokeStyle = "lime";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 1; i < knightTour.length; i++) {
+      const [x1, y1] = knightTour[i - 1];
+      const [x2, y2] = knightTour[i];
+      if (i === 1) {
+        ctx.moveTo(x1 * cellSize + cellSize / 2, y1 * cellSize + cellSize / 2);
+      }
+      ctx.lineTo(x2 * cellSize + cellSize / 2, y2 * cellSize + cellSize / 2);
+    }
+    ctx.stroke();
+  }
+
+  // Draw numbers
+  if (knightTour.length > 0) {
+    ctx.fillStyle = "yellow";
+    ctx.font = `${Math.max(8, cellSize / 2)}px Arial`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    knightTour.forEach(([x, y], i) => {
+      ctx.fillText(
+        (i + 1).toString(), 
+        x * cellSize + cellSize / 2, 
+        y * cellSize + cellSize / 2
+      );
+    });
+  }
+
+  // Draw start point
+  if (startX !== null && startY !== null) {
+    ctx.fillStyle = "red";
+    ctx.beginPath();
+    ctx.arc(
+      startX * cellSize + cellSize / 2, 
+      startY * cellSize + cellSize / 2, 
+      cellSize / 3, 
+      0, 
+      Math.PI * 2
+    );
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// Click to select start or move
+canvas.addEventListener("click", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left - offsetX) / scale;
+  const y = (e.clientY - rect.top - offsetY) / scale;
+  const i = Math.floor(x / cellSize);
+  const j = Math.floor(y / cellSize);
+
+  if (i < 0 || j < 0 || i >= size || j >= size) return;
+
+  if (startX === null) {
+    startX = i; 
+    startY = j;
+    knightTour = [[i, j]];
+  } else {
+    // Check if it's a valid knight move
+    const [cx, cy] = knightTour[knightTour.length - 1];
+    const isValidMove = moves.some(([dx, dy]) => 
+      cx + dx === i && cy + dy === j
+    );
+    
+    if (isValidMove && !isVisited(i, j)) {
+      knightTour.push([i, j]);
+    }
+  }
+  drawBoard();
+  updateButtons();
+});
+
+// Next step button – auto find next move by Warnsdorff
+document.getElementById("nextBtn").onclick = () => {
+  if (startX === null) return;
+  const [cx, cy] = knightTour[knightTour.length - 1];
+  const next = getNextMove(cx, cy);
+  if (next) {
+    knightTour.push(next);
+    drawBoard();
+    updateButtons();
+  }
+};
+
+// Undo step
+document.getElementById("undoBtn").onclick = () => {
+  if (knightTour.length > 1) {
+    knightTour.pop();
+    drawBoard();
+    updateButtons();
+  }
+};
+
+// Reset board
+document.getElementById("resetBtn").onclick = () => {
+  resetBoard();
+  drawBoard();
+  updateButtons();
+};
+
+// Reset zoom and pan
+document.getElementById("zoomResetBtn").onclick = () => {
+  resetView();
+  drawBoard();
+};
+
+// Update button states
+function updateButtons() {
+  const nextBtn = document.getElementById("nextBtn");
+  const undoBtn = document.getElementById("undoBtn");
+  const resetBtn = document.getElementById("resetBtn");
+  
+  nextBtn.disabled = startX === null;
+  undoBtn.disabled = knightTour.length <= 1;
+  resetBtn.disabled = startX === null;
+}
+
+// Warnsdorff heuristic
+function getNextMove(x, y) {
+  const options = [];
+  for (const [dx, dy] of moves) {
+    const nx = x + dx, ny = y + dy;
+    if (nx >= 0 && ny >= 0 && nx < size && ny < size && !isVisited(nx, ny)) {
+      const degree = countMoves(nx, ny);
+      options.push({ nx, ny, degree });
+    }
+  }
+  if (!options.length) return null;
+  options.sort((a, b) => a.degree - b.degree);
+  return [options[0].nx, options[0].ny];
+}
+
+function isVisited(x, y) {
+  return knightTour.some(([a, b]) => a === x && b === y);
+}
+
+function countMoves(x, y) {
+  return moves.filter(([dx, dy]) => {
+    const nx = x + dx, ny = y + dy;
+    return nx >= 0 && ny >= 0 && nx < size && ny < size && !isVisited(nx, ny);
+  }).length;
+}
+
+// --- Improved Zoom and Pan ---
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+  
+  const zoom = e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
+  const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * zoom));
+  
+  if (newScale !== scale) {
+    // Zoom towards mouse position
+    const worldX = (mouseX - offsetX) / scale;
+    const worldY = (mouseY - offsetY) / scale;
+    
+    scale = newScale;
+    offsetX = mouseX - worldX * scale;
+    offsetY = mouseY - worldY * scale;
+    
+    drawBoard();
+  }
+});
+
+// Mouse pan
+canvas.addEventListener("mousedown", (e) => {
+  dragging = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  canvas.style.cursor = "grabbing";
+});
+
+canvas.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  
+  const deltaX = e.clientX - lastX;
+  const deltaY = e.clientY - lastY;
+  
+  offsetX += deltaX;
+  offsetY += deltaY;
+  
+  lastX = e.clientX;
+  lastY = e.clientY;
+  
+  drawBoard();
+});
+
+canvas.addEventListener("mouseup", () => {
+  dragging = false;
+  canvas.style.cursor = "grab";
+});
+
+canvas.addEventListener("mouseleave", () => {
+  dragging = false;
+  canvas.style.cursor = "grab";
+});
+
+// Touch events for mobile
+let lastTouchDistance = 0;
+let lastTouchCenter = { x: 0, y: 0 };
+
+canvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  
+  if (e.touches.length === 1) {
+    // Single touch - pan
+    dragging = true;
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+  } else if (e.touches.length === 2) {
+    // Two touches - prepare for pinch zoom
+    const touch1 = e.touches[0];
+    const touch2 = e.touches[1];
+    lastTouchDistance = Math.sqrt(
+      Math.pow(touch2.clientX - touch1.clientX, 2) + 
+      Math.pow(touch2.clientY - touch1.clientY, 2)
+    );
+    lastTouchCenter = {
+      x: (touch1.clientX + touch2.clientX) / 2,
+      y: (touch1.clientY + touch2.clientY) / 2
+    };
+  }
+});
+
+canvas.addEventListener("touchmove", (e) => {
+  e.preventDefault();
+  
+  if (e.touches.length === 1 && dragging) {
+    // Single touch pan
+    const deltaX = e.touches[0].clientX - lastX;
+    const deltaY = e.touches[0].clientY - lastY;
+    
+    offsetX += deltaX;
+    offsetY += deltaY;
+    
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+    
+    drawBoard();
+  } else if (e.touches.length === 2) {
+    // Two touches - pinch zoom
+    const touch1 = e.touches[0];
+    const touch2 = e.touches[1];
+    const currentDistance = Math.sqrt(
+      Math.pow(touch2.clientX - touch1.clientX, 2) + 
+      Math.pow(touch2.clientY - touch1.clientY, 2)
+    );
+    
+    if (lastTouchDistance > 0) {
+      const zoom = currentDistance / lastTouchDistance;
+      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * zoom));
+      
+      if (newScale !== scale) {
+        // Zoom towards touch center
+        const rect = canvas.getBoundingClientRect();
+        const centerX = lastTouchCenter.x - rect.left;
+        const centerY = lastTouchCenter.y - rect.top;
+        
+        const worldX = (centerX - offsetX) / scale;
+        const worldY = (centerY - offsetY) / scale;
+        
+        scale = newScale;
+        offsetX = centerX - worldX * scale;
+        offsetY = centerY - worldY * scale;
+        
+        drawBoard();
+      }
+    }
+    
+    lastTouchDistance = currentDistance;
+    lastTouchCenter = {
+      x: (touch1.clientX + touch2.clientX) / 2,
+      y: (touch1.clientY + touch2.clientY) / 2
+    };
+  }
+});
+
+canvas.addEventListener("touchend", (e) => {
+  e.preventDefault();
+  
+  if (e.touches.length === 0) {
+    dragging = false;
+    lastTouchDistance = 0;
+  } else if (e.touches.length === 1) {
+    // Switch from two touches to one
+    dragging = true;
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+  }
+});
+
+// Keyboard shortcuts
+document.addEventListener("keydown", (e) => {
+  switch(e.key) {
+    case "r":
+    case "R":
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        resetBoard();
+        drawBoard();
+        updateButtons();
+      }
+      break;
+    case "z":
+    case "Z":
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          // Ctrl+Shift+Z - redo (not implemented)
+        } else {
+          // Ctrl+Z - undo
+          if (knightTour.length > 1) {
+            knightTour.pop();
+            drawBoard();
+            updateButtons();
+          }
+        }
+      }
+      break;
+    case " ":
+      e.preventDefault();
+      if (startX !== null) {
+        const [cx, cy] = knightTour[knightTour.length - 1];
+        const next = getNextMove(cx, cy);
+        if (next) {
+          knightTour.push(next);
+          drawBoard();
+          updateButtons();
+        }
+      }
+      break;
+  }
+});
+
+// Initialize
+drawBoard();
+updateButtons();
+</script>
+</body>
+</html>
